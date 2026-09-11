@@ -1,0 +1,35 @@
+version: 1
+name: all-formats-smoke-v1
+
+input:
+  path: ../data/raw/globe-broadband.txt
+  format: auto
+  domain: customer_service
+
+chunking:
+  strategy: document
+  chunk_size: 2000
+  chunk_overlap: 0
+  unit: characters
+
+endpoint:
+  profile: local-qwen
+  base_url: http://127.0.0.1:8080/v1
+  model: qwen38-27b-chat-rocmfp4
+  timeout_seconds: 120
+  temperature: 0.2
+
+generation:
+  prompt_pack: all_formats_v1
+
+validation:
+  grounding: exact_evidence
+  reject_duplicates: true
+  require_assistant_final_turn: true
+
+output:
+  directory: ../output/all-formats-smoke-v1
+  format: jsonl
+  resume: true
+  include_chunk_text: false
+

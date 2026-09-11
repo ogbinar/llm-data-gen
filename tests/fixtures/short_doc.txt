@@ -1,0 +1,1 @@
+All SIMs should be registered before activation. The registration flow should ask for the subscriber's full name, date of birth, address, government ID type and ID number.

@@ -1,0 +1,5 @@
+Paragraph one explains registration and identity checks.
+
+Paragraph two explains prepaid and postpaid billing behavior.
+
+Paragraph three explains support handoffs and troubleshooting steps.

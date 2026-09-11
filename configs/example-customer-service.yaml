@@ -1,0 +1,39 @@
+version: 1
+name: example-customer-service-v1
+
+input:
+  path: ../data/raw
+  format: auto
+  recursive: true
+  id_field: source_id
+  text_field: text
+  title_field: title
+  domain: customer_service
+
+chunking:
+  strategy: recursive_text
+  chunk_size: 1200
+  chunk_overlap: 150
+  unit: characters
+
+endpoint:
+  profile: local-qwen
+  base_url: http://127.0.0.1:8080/v1
+  model: qwen38-27b-chat-rocmfp4
+  timeout_seconds: 120
+  temperature: 0.2
+
+generation:
+  prompt_pack: customer_service_core_v1
+
+validation:
+  grounding: exact_evidence
+  reject_duplicates: true
+  require_assistant_final_turn: true
+
+output:
+  directory: ../output/example-customer-service-v1
+  format: jsonl
+  resume: true
+  include_chunk_text: false
+

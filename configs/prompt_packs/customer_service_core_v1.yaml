@@ -1,0 +1,14 @@
+version: 1
+name: customer_service_core_v1
+recipes:
+  - format: factual_qa
+    languages: [english, tagalog, taglish]
+    num_examples: 3
+  - format: troubleshooting
+    languages: [tagalog, taglish]
+    num_examples: 2
+  - format: multi_turn
+    languages: [taglish]
+    num_examples: 1
+    max_turns: 6
+

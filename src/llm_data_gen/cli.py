@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -26,6 +27,10 @@ COMMANDS = {
     "list-endpoints",
     "export",
     "retry",
+    "enqueue",
+    "worker",
+    "queue-status",
+    "finalize",
 }
 
 
@@ -33,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm-data-gen")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("run", "validate-config", "inspect"):
+    for name in ("run", "validate-config", "inspect", "enqueue"):
         command = subparsers.add_parser(name)
         command.add_argument("config", type=Path)
 
@@ -56,6 +61,15 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("dataset", type=Path)
     export.add_argument("output", type=Path)
     export.add_argument("--format", choices=("parquet", "csv", "legacy-jsonl"), required=True)
+
+    worker = subparsers.add_parser("worker")
+    worker.add_argument("--workers", type=int, default=None)
+
+    status = subparsers.add_parser("queue-status")
+    status.add_argument("run")
+
+    finalize = subparsers.add_parser("finalize")
+    finalize.add_argument("run")
     return parser
 
 
@@ -78,12 +92,13 @@ def build_legacy_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments and arguments[0] not in COMMANDS:
+    if arguments and arguments[0] not in COMMANDS and arguments[0] != "--help":
         _legacy_main(arguments)
         return
 
-    args = build_parser().parse_args(arguments)
-    if args.command in {"run", "retry", "validate-config", "inspect"}:
+    parser = build_parser()
+    args = parser.parse_args(arguments)
+    if args.command in {"run", "retry", "validate-config", "inspect", "enqueue"}:
         config_path = args.config.resolve()
         config = load_run_config(config_path)
         search_root = config_path.parent
@@ -117,6 +132,66 @@ def main(argv: list[str] | None = None) -> None:
                 indent=2,
             )
         )
+    elif args.command == "enqueue":
+        from .queueing import mark_enqueued, prepare_queued_run, task_payload, unfinished_job_ids
+
+        try:
+            from .queue_huey import enqueue_payload
+        except ModuleNotFoundError as exc:
+            if exc.name == "huey":
+                raise SystemExit(
+                    "queue support is optional; install it with `uv sync --extra queue`"
+                ) from exc
+            raise
+        plan = prepare_queued_run(config, search_root=search_root)
+        job_ids = unfinished_job_ids(plan)
+        # This command is the explicit recovery/reconciliation boundary: stale
+        # unfinished application states are reset before fresh broker messages
+        # are submitted. Durable attempt budgets are preserved.
+        mark_enqueued(plan, job_ids)
+        for job_id in job_ids:
+            enqueue_payload(task_payload(plan, job_id))
+        print(
+            json.dumps(
+                {
+                    "run_id": plan.run_id,
+                    "enqueued": len(job_ids),
+                    "output_directory": str(plan.config.output.directory),
+                },
+                indent=2,
+            )
+        )
+    elif args.command == "worker":
+        try:
+            workers = resolve_worker_count(args.workers)
+        except ValueError as exc:
+            parser.error(str(exc))
+        try:
+            from huey.consumer import Consumer
+            from .queue_huey import huey
+            from .queueing import consumer_process_lock
+        except ModuleNotFoundError as exc:
+            if exc.name == "huey":
+                raise SystemExit(
+                    "queue support is optional; install it with `uv sync --extra queue`"
+                ) from exc
+            raise
+        try:
+            with consumer_process_lock():
+                Consumer(
+                    huey, workers=workers, worker_type="thread", periodic=False
+                ).run()
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from exc
+    elif args.command == "queue-status":
+        from .queueing import queue_status
+
+        print(json.dumps(queue_status(args.run), indent=2))
+    elif args.command == "finalize":
+        from .queueing import finalize_queued_run
+
+        manifest = finalize_queued_run(args.run)
+        print(json.dumps(manifest.model_dump(mode="json"), indent=2))
     elif args.command == "validate-config":
         recipes = validate_config_semantics(config, search_root=search_root)
         print(
@@ -189,3 +264,15 @@ def _legacy_main(arguments: list[str]) -> None:
 
     rows = run_pipeline(config)
     print(f"generated {len(rows)} validated rows -> {config.output_path}")
+
+
+def resolve_worker_count(cli_value: int | None, environ: dict[str, str] | None = None) -> int:
+    environment = os.environ if environ is None else environ
+    raw = cli_value if cli_value is not None else environment.get("LLM_DATA_GEN_WORKERS", "1")
+    try:
+        workers = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("worker count must be a positive integer") from exc
+    if workers < 1:
+        raise ValueError("worker count must be at least 1")
+    return workers

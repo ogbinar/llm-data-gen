@@ -2,8 +2,9 @@
 
 > **Archive notice:** This file preserves the completed V1 plan and the detailed
 > V2 migration/acceptance record as they stood at the 2026-09-12 freeze. It is not
-> the current plan or backlog. See `IMPLEMENTATION_PLAN.md` for the canonical
-> frozen baseline and `TODO.md` for current work status.
+> the current plan or backlog. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
+> for the canonical frozen baseline and accepted optional queue, and
+> [TODO.md](TODO.md) for current work status.
 
 **Status:** V2 implemented, acceptance-validated, and frozen
 
@@ -11,8 +12,13 @@
 
 **Canonical product contracts:** `spec.md` and `spec/qa-formats.md`
 
-**Canonical current status:** this Section 0 and the implemented V2 record in
+**Archived V2 status sources:** the frozen-baseline snapshot below and the
+implemented V2 record in
 [Section 14](#14-source-language-preservation-revision-implemented-record)
+
+For current status, the canonical source is now
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). Section 0 and Section 14 below
+are retained snapshots of the original V2 freeze record.
 
 > **Binding product revision — 2026-09-11:** The pipeline is a source reformatter,
 > not a translation system. Language is an input/source property and is never a
@@ -27,7 +33,7 @@
 > by the frozen V2 contract and implementation record. Those statements describe
 > history, not supported current behavior.
 
-## 0. Frozen V2 Baseline (Canonical)
+## 0. Frozen V2 Baseline (Archived Snapshot)
 
 ### Freeze scope
 
@@ -944,3 +950,41 @@ evidence:
   Filipino factual rows still overlap in subject, and one Taglish factual question
   is mildly awkward. These are reported quality limitations, not translation or
   provenance failures.
+
+## Queue Extension History (2026-09-12)
+
+This section preserves the superseded implementation chronology that was removed
+from the concise canonical plan. It is evidence and rationale, not an active plan
+or current operating contract.
+
+The first optional Huey + SQLite slice extracted shared `prepare_run`,
+`execute_job`, and `finalize_run` seams; added immutable run snapshots and
+per-job outcomes; added `enqueue`, `worker`, `queue-status`, and `finalize`; and
+kept inline execution as the default with Huey confined to optional extras.
+Queue messages carried only run/config/job identity, while workers wrote job-owned
+outcomes and a deterministic finalizer produced canonical artifacts in planned
+order.
+
+Initial evidence was 75 passing tests, source/test compilation, diff checks, a
+Huey-free base install, a persisted 50-job SQLite burst, fake-client concurrency
+coverage, dequeue-loss reconciliation, bounded uninterrupted retries, redelivery
+safety, run isolation, and byte-idempotent finalization. One live single-worker
+job completed in 10.5 seconds. That live observation was never a throughput
+benchmark.
+
+A post-implementation review then identified five material gaps in the initial
+claims: retry budgets were not yet proven across interruption, outcome envelopes
+needed full plan-bound validation, the one-consumer process model needed
+enforcement, recovery needed to state that `enqueue CONFIG`—not consumer
+restart—reconciles a message removed at dequeue, and finalization needed explicit
+serialized manifest-last recovery.
+
+The §6.12 remediation closed those gaps. Final acceptance rose to 77 focused and
+131 full passing tests, with durable lifetime attempt accounting, full outcome
+integrity checks, a database-scoped consumer lock, real CLI reconciliation after
+dequeue loss, and staged manifest-last recovery. A three-thread real Huey
+consumer reached exactly three concurrent calls only against an instrumented fake
+endpoint; no live multi-worker throughput claim was made. Current behavior,
+limits, and final evidence are canonical in
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md#6-queue-acceptance-and-remediation)
+and [the reproducible smoke evidence](docs/remediation-smoke-evidence.md).

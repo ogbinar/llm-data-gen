@@ -125,6 +125,13 @@ class RejectedRecord(BaseModel):
     chunk_id: str | None = None
     qa_format: str | None = None
     language: str | None = None
+    language_origin: str | None = None
+    prompt_name: str | None = None
+    prompt_version: str | None = None
+    prompt_hash: str | None = None
+    generator_model: str | None = None
+    inference_backend: str | None = None
+    endpoint_profile: str | None = None
     failure_stage: str
     failure_reason: str
     raw_output: str | None = None

@@ -95,10 +95,41 @@
 - `retry` only re-executes selected rejected stages.
 - `export` produces the requested derived format.
 
+## Optional Huey + SQLite Queue
+
+- Inline import and execution remain Huey-free.
+- Immutable run snapshots bind config, sources, chunks, and ordered jobs.
+- Queue messages contain only run/config/job identity and no configured secret.
+- One consumer process is enforced per SQLite database; positive worker count
+  controls bounded thread concurrency in that process.
+- Durable attempt records enforce at most three transient inference calls across
+  interruption, reconciliation, and redelivery; deterministic failures do not
+  retry blindly.
+- `enqueue CONFIG` reconciles unfinished application state after dequeue loss;
+  consumer restart alone is not treated as message recovery.
+- Accepted, rejected, and `not_applicable` outcomes are fully rebound to their
+  plan and revalidated before canonical output.
+- Redelivery cannot duplicate terminal outcomes or accepted rows, and concurrent
+  runs remain isolated.
+- Finalization resolves duplicates in planned order, serializes concurrent
+  finalizers, recovers after staged replacement interruption, and writes the
+  completed manifest last with byte-stable reruns.
+- Queue and inline execution agree for deterministic accepted, parsing-rejected,
+  validation-rejected, and `not_applicable` fixtures.
+- Queued English, Tagalog/Filipino, and Taglish fixtures preserve provenance,
+  exact evidence, and the no-translation contract.
+
 ## Final Gate
 
 ~~~bash
 uv run pytest -q
+uv run pytest -q tests/test_queueing.py
+uv run python -m compileall -q src tests
+uv lock --check
+git diff --check
 ~~~
 
-A live smoke against the configured endpoint follows the deterministic suite.
+The accepted 2026-09-12 gate was 131 full tests and 77 focused queue/remediation
+tests. Live evidence is a bounded one-job, one-worker smoke, not a throughput
+benchmark; configured three-worker concurrency is proven by a real Huey consumer
+against an instrumented fake endpoint.

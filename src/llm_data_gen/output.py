@@ -39,6 +39,18 @@ def load_existing_example_ids(path: Path) -> set[str]:
     }
 
 
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    return _read_jsonl(path)
+
+
+def write_jsonl_atomic(path: Path, rows: list[dict[str, Any]]) -> None:
+    _write_jsonl_atomic(path, rows)
+
+
+def write_text_atomic(path: Path, content: str) -> None:
+    _atomic_text(path, content)
+
+
 class DatasetWriter:
     def __init__(self, config: RunConfig, config_hash: str):
         self.config = config

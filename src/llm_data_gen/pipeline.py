@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -8,6 +7,13 @@ from typing import Any
 from .chunking import chunk_document, chunk_documents
 from .client import OpenAICompatibleClient
 from .config import AppConfig, RunConfig, config_hash
+from .execution import (
+    execute_job,
+    finalize_run,
+    initial_manifest,
+    prepare_run,
+    validate_source_language_chain,
+)
 from .formats import resolve_format
 from .jobs import expand_jobs
 from .loader import load_source_document
@@ -19,16 +25,11 @@ from .models import (
     SkippedExample,
 )
 from .output import DatasetWriter, append_jsonl, append_skipped_jsonl, load_existing_example_ids
-from .parsing import parse_generated_output, parse_model_output
+from .parsing import parse_model_output
 from .prompt_packs import resolve_recipes
-from .prompting import compose_prompt
 from .prompts import PROMPT_VERSION, build_messages, families
 from .readers import read_corpus
-from .validation import (
-    normalized_message_signature,
-    second_pass_validate,
-    validate_generated_example,
-)
+from .validation import second_pass_validate
 
 
 def validate_config_semantics(
@@ -57,7 +58,7 @@ def inspect_run(config: RunConfig, *, search_root: Path | None = None) -> dict[s
     sources, source_failures = read_corpus(config.input)
     chunks = chunk_documents(sources, config.chunking)
     jobs = expand_jobs(chunks, recipes)
-    _validate_source_language_chain(sources, chunks, jobs)
+    validate_source_language_chain(sources, chunks, jobs)
     sizes = [len(chunk.text) for chunk in chunks]
     by_format: dict[str, int] = {}
     sources_by_language: dict[str, int] = {}
@@ -104,37 +105,13 @@ def run_config_pipeline(
     client: OpenAICompatibleClient | None = None,
     retry_stages: set[str] | None = None,
 ) -> list[SFTRecord]:
-    recipes = validate_config_semantics(config, search_root=search_root)
-    sources, source_failures = read_corpus(config.input)
-    chunks = chunk_documents(sources, config.chunking)
-    jobs = expand_jobs(chunks, recipes)
-    _validate_source_language_chain(sources, chunks, jobs)
-    chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
-    digest = config_hash(config, recipes)
-    writer = DatasetWriter(config, digest)
-    started_at = _now()
-    manifest = RunManifest(
-        config_name=config.name,
-        config_hash=digest,
-        run_status="running",
-        started_at=started_at,
-        resumed=writer.resumed,
-        endpoint_profile=config.endpoint.profile,
-        inference_backend=config.endpoint.backend,
-        generator_model=config.endpoint.model,
-        prompt_versions={
-            resolve_format(recipe.format).name: resolve_format(recipe.format).prompt_version
-            for recipe in recipes
-        },
-        source_count=len(sources),
-        source_failure_count=len(source_failures),
-        chunk_count=len(chunks),
-        requested_jobs=len(jobs),
-    )
-    writer.initialize(manifest, sources, chunks)
+    plan = prepare_run(config, search_root=search_root)
+    writer = DatasetWriter(config, plan.config_hash)
+    manifest = initial_manifest(plan, resumed=writer.resumed)
+    writer.initialize(manifest, list(plan.sources), list(plan.chunks))
 
     if not writer.resumed:
-        for failure in source_failures:
+        for failure in plan.source_failures:
             writer.append_rejection(
                 RejectedRecord(
                     failure_stage=failure.failure_stage,
@@ -154,137 +131,43 @@ def run_config_pipeline(
     generated: list[SFTRecord] = []
 
     try:
-        for job in jobs:
+        for job in plan.jobs:
             if job.job_id in terminal:
                 continue
-            chunk = chunks_by_id[job.chunk_id]
-            prompt_messages, prompt_hash = compose_prompt(chunk, job)
-            parameters = {
-                "temperature": config.endpoint.temperature,
-                "top_p": config.endpoint.top_p,
-                **({"max_tokens": config.endpoint.max_tokens} if config.endpoint.max_tokens else {}),
-                **job.settings,
-            }
-            raw = ""
-            try:
-                raw = inference.generate(prompt_messages, parameters)
-            except Exception as exc:
-                _reject(
-                    writer,
-                    job,
-                    chunk,
-                    "generation",
-                    f"{type(exc).__name__}: {exc}",
-                    raw=None,
-                )
+            outcome = execute_job(plan, job.job_id, inference)
+            if outcome.outcome == "accepted" and outcome.record and outcome.signature:
+                if (
+                    config.validation.reject_duplicates
+                    and outcome.signature in signatures
+                ):
+                    duplicate = outcome.rejection or RejectedRecord(
+                        job_id=job.job_id,
+                        source_id=outcome.record.source_id,
+                        chunk_id=outcome.record.chunk_id,
+                        qa_format=job.qa_format,
+                        language=job.language,
+                        failure_stage="duplicate",
+                        failure_reason="normalized messages duplicate an accepted example",
+                        raw_output=outcome.raw_output,
+                        duplicate_of=signatures[outcome.signature],
+                        provenance={
+                            "source_path": plan.chunk(job.chunk_id).provenance_path,
+                            "source_checksum": plan.chunk(job.chunk_id).source_checksum,
+                            "chunk_strategy": plan.chunk(job.chunk_id).strategy,
+                            "chunk_index": plan.chunk(job.chunk_id).chunk_index,
+                        },
+                        recorded_at=outcome.recorded_at,
+                    )
+                    writer.append_rejection(duplicate)
+                    continue
+                writer.append_record(outcome.record)
+                signatures[outcome.signature] = outcome.record.example_id
+                generated.append(outcome.record)
                 continue
-            try:
-                parsed = parse_generated_output(raw)
-            except Exception as exc:
-                _reject(
-                    writer,
-                    job,
-                    chunk,
-                    "parsing",
-                    f"{type(exc).__name__}: {exc}",
-                    raw=raw,
-                )
-                continue
-            if parsed.qa_format != job.qa_format:
-                _reject(
-                    writer,
-                    job,
-                    chunk,
-                    "validation",
-                    f"format mismatch: expected {job.qa_format!r}, got {parsed.qa_format!r}",
-                    raw=raw,
-                )
-                continue
-            if parsed.status == "not_applicable":
-                _reject(
-                    writer,
-                    job,
-                    chunk,
-                    "not_applicable",
-                    parsed.reason or "source does not support this format",
-                    raw=raw,
-                    outcome="not_applicable",
-                )
-                continue
+            if outcome.rejection:
+                writer.append_rejection(outcome.rejection, outcome=outcome.outcome)
 
-            errors = validate_generated_example(parsed, job, chunk, config.validation)
-            if errors:
-                _reject(
-                    writer,
-                    job,
-                    chunk,
-                    "validation",
-                    "; ".join(errors),
-                    raw=raw,
-                )
-                continue
-
-            signature = normalized_message_signature(parsed)
-            if config.validation.reject_duplicates and signature in signatures:
-                _reject(
-                    writer,
-                    job,
-                    chunk,
-                    "duplicate",
-                    "normalized messages duplicate an accepted example",
-                    raw=raw,
-                    duplicate_of=signatures[signature],
-                )
-                continue
-
-            generated_at = _now()
-            example_digest = hashlib.sha256(
-                f"{job.job_id}::{signature}".encode("utf-8")
-            ).hexdigest()
-            record = SFTRecord(
-                example_id=f"sha256:{example_digest}",
-                job_id=job.job_id,
-                source_id=chunk.source_id,
-                chunk_id=chunk.chunk_id,
-                domain=chunk.domain,
-                qa_format=job.qa_format,
-                language=chunk.language,
-                messages=parsed.messages,
-                evidence=parsed.evidence,
-                prompt_name=job.prompt_name,
-                prompt_version=job.prompt_version,
-                prompt_hash=prompt_hash,
-                generator_model=config.endpoint.model,
-                inference_backend=config.endpoint.backend,
-                endpoint_profile=config.endpoint.profile,
-                generation_parameters={
-                    **parameters,
-                    "sample_index": job.sample_index,
-                    "recipe_hash": job.recipe_hash,
-                    "source_language_origin": chunk.language_origin,
-                    **({"max_turns": job.max_turns} if job.max_turns else {}),
-                },
-                generated_at=generated_at,
-                metadata=parsed.metadata,
-            )
-            writer.append_record(record)
-            signatures[signature] = record.example_id
-            generated.append(record)
-
-        summary = writer.summarize()
-        manifest = manifest.model_copy(
-            update={
-                "run_status": "completed",
-                "completed_at": _now(),
-                "accepted_jobs": summary["accepted"],
-                "rejected_jobs": summary["rejected"],
-                "not_applicable_jobs": summary["not_applicable"],
-                "accepted_by_format": summary["accepted_by_format"],
-                "accepted_by_language": summary["accepted_by_language"],
-                "accepted_by_source": summary["accepted_by_source"],
-                "failures_by_stage": summary["failures_by_stage"],
-            }
-        )
+        manifest = finalize_run(plan)
         writer.write_manifest(manifest)
     except Exception:
         writer.write_manifest(
@@ -294,61 +177,8 @@ def run_config_pipeline(
     return generated
 
 
-def _reject(
-    writer: DatasetWriter,
-    job,
-    chunk,
-    stage: str,
-    reason: str,
-    *,
-    raw: str | None,
-    outcome: str = "rejected",
-    duplicate_of: str | None = None,
-) -> None:
-    writer.append_rejection(
-        RejectedRecord(
-            job_id=job.job_id,
-            source_id=chunk.source_id,
-            chunk_id=chunk.chunk_id,
-            qa_format=job.qa_format,
-            language=job.language,
-            failure_stage=stage,
-            failure_reason=reason,
-            raw_output=raw,
-            duplicate_of=duplicate_of,
-            provenance={
-                "source_path": chunk.provenance_path,
-                "source_checksum": chunk.source_checksum,
-                "chunk_strategy": chunk.strategy,
-                "chunk_index": chunk.chunk_index,
-            },
-            recorded_at=_now(),
-        ),
-        outcome=outcome,
-    )
-
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _validate_source_language_chain(sources, chunks, jobs) -> None:
-    sources_by_id = {source.source_id: source for source in sources}
-    chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
-    for chunk in chunks:
-        source = sources_by_id[chunk.source_id]
-        if (chunk.language, chunk.language_origin) != (
-            source.language,
-            source.language_origin,
-        ):
-            raise ValueError(f"source language provenance mismatch for chunk {chunk.chunk_id}")
-    for job in jobs:
-        chunk = chunks_by_id[job.chunk_id]
-        if (job.language, job.language_origin) != (
-            chunk.language,
-            chunk.language_origin,
-        ):
-            raise ValueError(f"source language provenance mismatch for job {job.job_id}")
 
 
 def run_pipeline(

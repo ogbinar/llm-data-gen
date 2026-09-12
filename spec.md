@@ -111,12 +111,23 @@ Unsupported recommendation-style requests may produce a structured `not_applicab
 - V1 target-language configs fail before inference with actionable migration
   guidance. The deprecated argument CLI requires explicit source language.
 
+Inline execution is the default. An optional Huey + SQLite path may persist
+expanded jobs and run them through one local consumer process with configurable
+thread concurrency. It uses the same generation and validation seam as inline
+execution. Queue recovery is explicit: after interruption, the operator reruns
+`enqueue CONFIG` to reconcile unfinished work before continuing consumption.
+Workers persist immutable per-job outcomes; a serialized finalizer stages all
+canonical files and writes the completed manifest last.
+
 ## Exports
 
 JSONL is canonical. CSV, Parquet, and legacy JSONL are derived exports.
 
 ## Non-Goals
 
-The current system does not translate, select a target language, or claim semantic
-language detection. It also does not require a database, queue, distributed
-scheduler, semantic chunker, fuzzy deduplicator, or LLM-as-judge validator.
+The current system does not translate, select a target language, or claim
+semantic language detection. Its core does not require a database or queue. The
+optional SQLite queue does not provide multiple consumer processes, multi-host
+execution, automatic startup reconciliation, request/token rate limiting, or a
+distributed scheduler. Semantic chunking, fuzzy deduplication, and LLM-as-judge
+validation also remain outside the binding contract.

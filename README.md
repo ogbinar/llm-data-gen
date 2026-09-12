@@ -1,70 +1,36 @@
 # llm-data-gen
 
-Turn source corpora into grounded, validated chat datasets through one
-reproducible YAML configuration.
+`llm-data-gen` turns local source corpora into grounded, validated
+`sft_chat_v1` datasets through a reproducible YAML configuration. It provides
+deterministic source and job identities, exact-evidence validation, row-level
+failure isolation, resume/retry support, and derived CSV, Parquet, and legacy
+JSONL exports.
 
-> **Frozen V2 rule:** change the interaction format, never the source language.
-> The pipeline does not translate, select a target language, or intentionally add
-> or remove code-switching.
+> **Frozen V2 contract:** change the interaction format, never the source
+> language. The pipeline does not translate, choose a target language, or
+> intentionally add or remove code-switching.
 
-[Five-minute walkthrough](#five-minute-walkthrough) ·
-[Practical reference](#practical-reference) ·
-[Project status](#project-status) ·
-[GitHub](https://github.com/ogbinar/llm-data-gen)
+English remains English, Filipino/Tagalog remains Filipino/Tagalog, and Taglish
+remains Taglish. Language is declared input provenance that flows from source to
+chunk to job to accepted row; it is not a recipe dimension or a label selected
+by the model.
 
-## Five-Minute Walkthrough
+## Quick start: inline execution (default)
 
-### 1. Problem and project introduction
-
-Useful fine-tuning data needs more than fluent model output: it needs grounding,
-consistent structure, traceable provenance, failure isolation, and reproducible
-runs. `llm-data-gen` compiles documents into QA and interaction formats while
-keeping evidence and source identity attached to every accepted row.
-
-Language is input provenance—not a generation axis. English stays English,
-Filipino/Tagalog stays Filipino/Tagalog, and Taglish stays Taglish.
-
-### 2. Workflow
-
-```text
-corpus + input.language
-  -> sources -> chunks -> format jobs
-  -> preserving prompt -> OpenAI-compatible model
-  -> parse -> validate -> accept or reject
-  -> resumable sft_chat_v1 dataset
-```
-
-Jobs expand as `chunk × format × sample index`, never by language. Exact evidence,
-format structure, duplicates, and provenance are checked before a row is accepted.
-
-### 3. Architecture
-
-```text
-[RunConfig V2]
-      |
-[readers] -> [chunkers] -> [jobs + prompts]
-                                  |
-                         [inference client]
-                                  |
-                    [parser + validators]
-                                  |
-                    [writer + exporters]
-```
-
-Typed stages keep corpus handling, formats, inference, validation, and output
-independent. Language and its origin flow `source -> chunk -> job -> row`; the
-pipeline supplies the accepted label instead of trusting the model to choose it.
-Any OpenAI-compatible endpoint can be configured.
-
-### 4. Configuration
-
-Install with Python 3.11+ and [`uv`](https://docs.astral.sh/uv/):
+Requirements: Python 3.11+ and [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync --extra dev
+uv sync
+uv run llm-data-gen validate-config configs/example-customer-service.yaml
+uv run llm-data-gen inspect configs/example-customer-service.yaml
+uv run llm-data-gen run configs/example-customer-service.yaml
 ```
 
-Minimal valid V2 YAML, when saved under `configs/`:
+`validate-config` and `inspect` do not perform inference. `run` is the default,
+synchronous path and does not import or require Huey. Start the OpenAI-compatible
+endpoint configured in the YAML before running inference.
+
+A minimal V2 configuration looks like this when stored in `configs/`:
 
 ```yaml
 version: 2
@@ -80,128 +46,146 @@ output:
   directory: ../output/minimal-source-preserving-v2
 ```
 
-Paths are relative to the config file. Omitted sections use validated defaults,
-including the configurable local endpoint profile. The shipped explicit config
-uses llama-swap at `http://127.0.0.1:8080/v1` with
-`qwen38-27b-chat-rocmfp4`; neither is an architectural requirement.
+Paths are resolved relative to the configuration file. Omitted sections use
+validated defaults. See
+[`configs/example-customer-service.yaml`](configs/example-customer-service.yaml)
+for an explicit example.
 
-Validate and inspect without inference, then run after starting the configured
-backend:
+## Optional persistent queue: Huey + SQLite
+
+Use the queue when planned jobs need a persistent local buffer or bounded
+concurrent inference. It changes execution, not dataset identity, validation, or
+the source-language contract.
 
 ```bash
-uv run llm-data-gen validate-config configs/example-customer-service.yaml
-uv run llm-data-gen inspect configs/example-customer-service.yaml
-uv run llm-data-gen run configs/example-customer-service.yaml
+uv sync --extra queue
+export LLM_DATA_GEN_QUEUE_DB="$PWD/.llm-data-gen/huey.db"
+
+# Prepare an immutable run snapshot and enqueue unfinished jobs.
+uv run llm-data-gen enqueue configs/example-customer-service.yaml
+
+# Keep this single consumer process running (one worker by default).
+uv run llm-data-gen worker --workers 1
 ```
 
-### 5. English, Tagalog, and Taglish examples
+From another shell, using the same `LLM_DATA_GEN_QUEUE_DB`:
 
-These are short source excerpts and exact accepted factual QA rows from the final
-r4 preservation runs.
+```bash
+uv run llm-data-gen queue-status output/example-customer-service-source-preserving-v2
+uv run llm-data-gen finalize output/example-customer-service-source-preserving-v2
+```
 
-**English — Globe broadband**
+The output directory or the `run_id` printed by `enqueue` can identify a queued
+run. `finalize` succeeds only after every planned job has a terminal application
+outcome.
 
-- Input excerpt: “including 300 Mbps, 500 Mbps, 1 Gbps, and 2.5 Gbps”
-- User: “What speed tiers are available for GFiber plans on the Globe AT HOME broadband page?”
-- Assistant: “The available speed tiers for GFiber plans include 300 Mbps, 500 Mbps, 1 Gbps, and 2.5 Gbps.”
+Operational limits and recovery rules:
 
-**Tagalog — Proclamation No. 1041**
+- SQLite queueing is supported only on one local host with exactly one consumer
+  process per queue database. `--workers N` supplies thread concurrency inside
+  that process; a second consumer is rejected.
+- Worker-count precedence is `--workers`, then `LLM_DATA_GEN_WORKERS`, then `1`.
+  It limits concurrent generation calls, not requests/minute or tokens/minute.
+- After interruption, run `enqueue CONFIG` again before restarting/continuing the
+  consumer. This is the manual reconciliation step for unfinished work. Consumer
+  restart alone cannot restore a message SQLiteHuey removed at dequeue.
+- Transient connection, timeout, HTTP 429, and HTTP 5xx failures receive at most
+  two retries. Durable attempt records enforce at most three inference calls per
+  job across interruption, recovery, and redelivery.
+- Workers write immutable per-job outcomes, never canonical shared JSONL.
+  Finalization runs in planned-job order, stages the complete canonical
+  generation, replaces data files deterministically, and writes the completed
+  manifest last. This is recoverable staging, not a multi-file transaction.
+- There is no automatic startup reconciliation, per-request/token rate limiter,
+  multi-consumer process mode, multi-host execution, or external broker adapter.
 
-- Input excerpt:
-
-  > (Sgd.) RUBEN D. TORRES
-  > Kalihim Tagapagpaganap
-
-- User: “Sino ang naglagda bilang Kalihim Tagapagpaganap ng Proklamasyon Blg. 1041?”
-- Assistant: “Si Ruben D. Torres ang naglagda bilang Kalihim Tagapagpaganap ng Proklamasyon Blg. 1041.”
-
-**Taglish — QC SSDD online services**
-
-- Input excerpt: “may approved QCitizen ID para makapag-upload ng mga required documents online”
-- User: “Ano ang kailangan ng mga QCitizen para makapag-upload ng mga required documents online para sa mga serbisyong hatid ng SSDD?”
-- Assistant: “Kinakailangan nilang may approved QCitizen ID para makapag-upload ng mga required documents online.”
-
-The examples are illustrative excerpts, not complete documents. Source content
-retains its original rights and provenance and is not covered by this software's
-MIT license.
-
-## Practical Reference
-
-### Inputs and formats
-
-Readers support text, Markdown, JSON, JSONL, CSV, and Parquet files or directories.
-`input.language` is required and accepts `english`, `filipino`, `tagalog`, or
-`taglish`. Structured formats may opt into per-record overrides with
-`input.language_field`; mixed-language plain-text directories require separate
-runs. Semantic language detection is not claimed.
-
-Chunkers: `document`, `recursive_text`, `markdown_sections`, `fixed_tokens`.
-
-Interaction formats: `factual_qa`, `transactional`, `troubleshooting`,
-`scenario_response`, `multi_turn`, `feedback_response`, `conflict_resolution`,
-`needs_recommendation`, `cross_sell`, and `intent_response`.
-
-List active registries with `list-source-languages`, `list-formats`,
-`list-chunkers`, `list-prompt-packs`, or `list-endpoints`.
-
-### Output artifacts
+## Architecture
 
 ```text
-manifest.json          status, counts, timing, model, hashes
+RunConfig V2
+  -> readers -> SourceDocument(language + origin)
+  -> chunker -> Chunk(language + origin)
+  -> recipes -> deterministic GenerationJob(language + origin)
+  -> inline executor (default)
+       or immutable snapshot -> Huey/SQLite -> one consumer process
+  -> shared inference, parsing, and validation
+  -> terminal job outcomes
+  -> deterministic writer/finalizer
+  -> canonical dataset and derived exports
+```
+
+Jobs expand as `chunk × format × sample index`, never by language. Both
+execution paths share preparation, single-job execution, validation, and output
+contracts. Accepted rows must pass strict schema and conversation checks,
+format-specific rules, source/chunk/job language-provenance equality, exact
+source-evidence checks, and normalized exact deduplication. A grounded request
+that the source cannot support may become `not_applicable`.
+
+## Inputs, formats, and outputs
+
+Readers support text, Markdown, JSON, JSONL, CSV, and Parquet files or
+directories. `input.language` is required and accepts `english`, `filipino`,
+`tagalog`, or `taglish`. Structured records may opt into per-record overrides
+with `input.language_field`; mixed-language plain-text directories require
+separate runs.
+
+Chunkers are `document`, `recursive_text`, `markdown_sections`, and
+`fixed_tokens`. Ten interaction formats are available: `factual_qa`,
+`transactional`, `troubleshooting`, `scenario_response`, `multi_turn`,
+`feedback_response`, `conflict_resolution`, `needs_recommendation`, `cross_sell`,
+and `intent_response`.
+
+Every run creates the seven canonical artifacts:
+
+```text
+manifest.json          run status, counts, model, and hashes
 config.resolved.yaml   effective secret-free configuration
 sources.jsonl          normalized source provenance
 chunks.jsonl           chunks and inherited provenance
 dataset.jsonl          accepted sft_chat_v1 rows
 rejected.jsonl         source and row-level failures
-checkpoint.jsonl       append-safe outcomes for resume
+checkpoint.jsonl       terminal outcomes used for resume
 ```
 
-Validation covers strict schemas, message roles and final turn, format rules,
-language-provenance equality, exact source evidence, and normalized exact
-duplicates. Unsupported requests may become `not_applicable` instead of invented
-content.
+Queued runs additionally retain `queue-state.json` and private immutable state
+under `work/`. JSONL is canonical; use `llm-data-gen export` for CSV, Parquet, or
+legacy JSONL.
 
-### Retry and resume
-
-Inspect `rejected.jsonl`, then retry only relevant stages:
+## Testing and status
 
 ```bash
-uv run llm-data-gen retry configs/example-customer-service.yaml --stages generation,parsing
-uv run llm-data-gen retry configs/example-customer-service.yaml --stages validation
-```
-
-Do not blindly retry `not_applicable` or duplicate outcomes. With `resume: true`,
-a normal run executes only jobs without terminal checkpoints. Config hashes block
-incompatible output-directory reuse.
-
-### Export and test
-
-JSONL is canonical; CSV, Parquet, and legacy JSONL are derived exports:
-
-```bash
-uv run llm-data-gen export output/example-customer-service-source-preserving-v2/dataset.jsonl output/example.parquet --format parquet
-uv run llm-data-gen export output/example-customer-service-source-preserving-v2/dataset.jsonl output/example.csv --format csv
-uv run llm-data-gen export output/example-customer-service-source-preserving-v2/dataset.jsonl output/example.legacy.jsonl --format legacy-jsonl
+uv sync --extra dev
 uv run pytest -q
+uv run pytest -q tests/test_queueing.py
 uv run python -m compileall -q src tests
+uv lock --check
+git diff --check
 ```
 
-### Compatibility and limits
+Frozen V2 and the optional local queue are accepted as of 2026-09-12. The final
+verification gate is **131 full tests** and **77 focused queue/remediation tests**,
+plus successful compilation, lock, and diff checks. Real-process tests prove the
+single-consumer lock and manual dequeue-loss reconciliation. Three-worker
+concurrency was proved only against an instrumented fake OpenAI-compatible
+endpoint.
 
-Strict config V2 requires `input.language`. V1 configs and recipe/pack `languages`
-arrays fail before inference with migration guidance. The deprecated argument CLI
-remains available but requires `--source-language`; new work should use YAML V2.
+The live queue smoke was deliberately just one job: it completed in 10.5 seconds
+(about 5.7 jobs/min if arithmetically extrapolated), with one accepted English
+row, one durable attempt, exact evidence, zero rejections, and byte-stable
+repeated finalization. That observation is **not a throughput benchmark** and
+does not establish scaling or multi-worker live-model performance.
 
-The frozen baseline is local and sequential. Exact evidence is not semantic
-factuality scoring, prompt constraints cannot prove zero language drift, and
-deduplication is exact rather than semantic. Semantic detection/judging,
-fuzzy deduplication, semantic chunking, batching, and distributed orchestration
-are deferred.
+Known limits remain: declared language provenance is not semantic language
+detection; exact evidence is not full semantic factuality; prompt constraints
+cannot prove zero language drift; and deduplication is exact rather than semantic.
 
-## Project Status
+## Project documents
 
-Source-language-preserving V2 is frozen and acceptance-validated as of 2026-09-12.
-There are no active required freeze tasks. See the canonical
-[implementation plan](IMPLEMENTATION_PLAN.md), [TODO](TODO.md),
-[product specification](spec.md), [QA-format contract](spec/qa-formats.md), and
-[test contract](TEST_CASES.md).
+- [Canonical implementation plan and status](IMPLEMENTATION_PLAN.md)
+- [Active tracker](TODO.md)
+- [Product specification](spec.md)
+- [QA-format contract](spec/qa-formats.md)
+- [Test contract](TEST_CASES.md)
+- [Reproducible remediation smoke evidence](docs/remediation-smoke-evidence.md)
+- [Dated V1/V2 implementation history](IMPLEMENTATION_PLAN_HISTORY_2026-09-12.md)
+- [GitHub repository](https://github.com/ogbinar/llm-data-gen)

@@ -10,7 +10,6 @@ from .client import OpenAICompatibleClient
 from .config import AppConfig, RunConfig, config_hash
 from .formats import resolve_format
 from .jobs import expand_jobs
-from .languages import resolve_language
 from .loader import load_source_document
 from .models import (
     ParsedExample,
@@ -50,8 +49,6 @@ def validate_config_semantics(
             raise ValueError(
                 f"unsupported settings for {definition.name}: {sorted(unsupported)}"
             )
-        for language in recipe.languages:
-            resolve_language(language)
     return recipes
 
 
@@ -60,15 +57,20 @@ def inspect_run(config: RunConfig, *, search_root: Path | None = None) -> dict[s
     sources, source_failures = read_corpus(config.input)
     chunks = chunk_documents(sources, config.chunking)
     jobs = expand_jobs(chunks, recipes)
+    _validate_source_language_chain(sources, chunks, jobs)
     sizes = [len(chunk.text) for chunk in chunks]
     by_format: dict[str, int] = {}
-    by_language: dict[str, int] = {}
+    sources_by_language: dict[str, int] = {}
+    chunks_by_language: dict[str, int] = {}
+    for source in sources:
+        sources_by_language[source.language] = sources_by_language.get(source.language, 0) + 1
+    for chunk in chunks:
+        chunks_by_language[chunk.language] = chunks_by_language.get(chunk.language, 0) + 1
     for job in jobs:
         by_format[job.qa_format] = by_format.get(job.qa_format, 0) + 1
-        by_language[job.language] = by_language.get(job.language, 0) + 1
     return {
         "config_name": config.name,
-        "config_hash": config_hash(config),
+        "config_hash": config_hash(config, recipes),
         "source_count": len(sources),
         "source_failure_count": len(source_failures),
         "chunk_count": len(chunks),
@@ -88,7 +90,8 @@ def inspect_run(config: RunConfig, *, search_root: Path | None = None) -> dict[s
         "recipes": [recipe.model_dump(mode="json") for recipe in recipes],
         "job_count": len(jobs),
         "jobs_by_format": by_format,
-        "jobs_by_language": by_language,
+        "sources_by_language": sources_by_language,
+        "chunks_by_language": chunks_by_language,
         "output_directory": str(config.output.directory),
         "resume": config.output.resume,
     }
@@ -105,8 +108,9 @@ def run_config_pipeline(
     sources, source_failures = read_corpus(config.input)
     chunks = chunk_documents(sources, config.chunking)
     jobs = expand_jobs(chunks, recipes)
+    _validate_source_language_chain(sources, chunks, jobs)
     chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
-    digest = config_hash(config)
+    digest = config_hash(config, recipes)
     writer = DatasetWriter(config, digest)
     started_at = _now()
     manifest = RunManifest(
@@ -186,6 +190,16 @@ def run_config_pipeline(
                     raw=raw,
                 )
                 continue
+            if parsed.qa_format != job.qa_format:
+                _reject(
+                    writer,
+                    job,
+                    chunk,
+                    "validation",
+                    f"format mismatch: expected {job.qa_format!r}, got {parsed.qa_format!r}",
+                    raw=raw,
+                )
+                continue
             if parsed.status == "not_applicable":
                 _reject(
                     writer,
@@ -234,7 +248,7 @@ def run_config_pipeline(
                 chunk_id=chunk.chunk_id,
                 domain=chunk.domain,
                 qa_format=job.qa_format,
-                language=job.language,
+                language=chunk.language,
                 messages=parsed.messages,
                 evidence=parsed.evidence,
                 prompt_name=job.prompt_name,
@@ -247,6 +261,7 @@ def run_config_pipeline(
                     **parameters,
                     "sample_index": job.sample_index,
                     "recipe_hash": job.recipe_hash,
+                    "source_language_origin": chunk.language_origin,
                     **({"max_turns": job.max_turns} if job.max_turns else {}),
                 },
                 generated_at=generated_at,
@@ -317,11 +332,32 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _validate_source_language_chain(sources, chunks, jobs) -> None:
+    sources_by_id = {source.source_id: source for source in sources}
+    chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
+    for chunk in chunks:
+        source = sources_by_id[chunk.source_id]
+        if (chunk.language, chunk.language_origin) != (
+            source.language,
+            source.language_origin,
+        ):
+            raise ValueError(f"source language provenance mismatch for chunk {chunk.chunk_id}")
+    for job in jobs:
+        chunk = chunks_by_id[job.chunk_id]
+        if (job.language, job.language_origin) != (
+            chunk.language,
+            chunk.language_origin,
+        ):
+            raise ValueError(f"source language provenance mismatch for job {job.job_id}")
+
+
 def run_pipeline(
     config: AppConfig,
     client: OpenAICompatibleClient | None = None,
 ) -> list[ParsedExample]:
-    source = load_source_document(config.input_path, config.source_id)
+    source = load_source_document(
+        config.input_path, config.source_id, source_language=config.source_language
+    )
     chunks = chunk_document(source, config.chunk_size)
     client = client or OpenAICompatibleClient(config.backend)
     existing_ids = load_existing_example_ids(config.output_path) if config.resume else set()

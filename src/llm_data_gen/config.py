@@ -25,13 +25,23 @@ class AppConfig(BaseModel):
     input_path: Path
     output_path: Path = Path("output/generated_examples.jsonl")
     source_id: str | None = None
+    source_language: str = "english"
     chunk_size: int = 1200
     backend: BackendConfig = Field(default_factory=BackendConfig)
     resume: bool = True
 
+    @model_validator(mode="after")
+    def validate_source_language(self) -> "AppConfig":
+        from .languages import resolve_language
+
+        self.source_language = resolve_language(self.source_language).name
+        return self
+
 
 class InputConfig(StrictModel):
     path: Path
+    language: str
+    language_field: str | None = None
     format: Literal["auto", "txt", "md", "json", "jsonl", "csv", "parquet"] = "auto"
     recursive: bool = True
     id_field: str = "source_id"
@@ -39,6 +49,19 @@ class InputConfig(StrictModel):
     title_field: str = "title"
     metadata_fields: list[str] | None = None
     domain: str = "general"
+
+    @model_validator(mode="after")
+    def validate_language(self) -> "InputConfig":
+        from .languages import resolve_language
+
+        self.language = resolve_language(self.language).name
+        if self.language_field is not None:
+            self.language_field = self.language_field.strip()
+            if not self.language_field:
+                raise ValueError("language_field must not be blank")
+        if self.language_field and self.format in {"txt", "md"}:
+            raise ValueError("language_field is only supported for structured inputs")
+        return self
 
 
 class ChunkingConfig(StrictModel):
@@ -76,18 +99,9 @@ class EndpointConfig(StrictModel):
 
 class GenerationRecipe(StrictModel):
     format: str
-    languages: list[str]
     num_examples: int = Field(default=1, gt=0)
     max_turns: int | None = Field(default=None, ge=2)
     settings: dict[str, Any] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_languages(self) -> "GenerationRecipe":
-        if not self.languages:
-            raise ValueError("languages must not be empty")
-        if len(set(self.languages)) != len(self.languages):
-            raise ValueError("languages must not contain duplicates")
-        return self
 
 
 class GenerationConfig(StrictModel):
@@ -115,7 +129,7 @@ class OutputConfig(StrictModel):
 
 
 class RunConfig(StrictModel):
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     name: str
     input: InputConfig
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
@@ -153,6 +167,22 @@ def load_run_config(path: Path) -> RunConfig:
     if not isinstance(raw, dict):
         raise ValueError("run configuration must be a YAML object")
 
+    version = raw.get("version")
+    generation = raw.get("generation") or {}
+    recipes = generation.get("recipes") or [] if isinstance(generation, dict) else []
+    legacy_languages = any(
+        isinstance(recipe, dict) and "languages" in recipe for recipe in recipes
+    )
+    if version != 2 or legacy_languages:
+        detail = (
+            "generation.recipes[*].languages was removed; " if legacy_languages else ""
+        )
+        raise ValueError(
+            f"incompatible run configuration version {version!r}; {detail}"
+            "migrate to version: 2, set input.language (and optional input.language_field) "
+            "instead. This pipeline does not translate source content."
+        )
+
     endpoint = raw.get("endpoint") or {}
     if not isinstance(endpoint, dict):
         raise ValueError("endpoint must be an object")
@@ -163,6 +193,11 @@ def load_run_config(path: Path) -> RunConfig:
 
     config = RunConfig.model_validate(raw)
     base = config_path.parent
+    source_format = config.input.format
+    if source_format == "auto" and config.input.path.suffix:
+        source_format = config.input.path.suffix.lower().lstrip(".")
+    if config.input.language_field and source_format in {"txt", "md"}:
+        raise ValueError("input.language_field is only supported for structured inputs")
     return config.model_copy(
         update={
             "input": config.input.model_copy(update={"path": _resolve_path(config.input.path, base)}),
@@ -179,12 +214,21 @@ def redacted_config_dict(config: RunConfig) -> dict[str, Any]:
     return payload
 
 
-def config_hash(config: RunConfig) -> str:
+def config_hash(config: RunConfig, recipes: list[GenerationRecipe] | None = None) -> str:
     payload = redacted_config_dict(config)
+    if recipes is not None:
+        from .formats import resolve_format
+
+        payload["_resolved_generation_contract"] = [
+            {
+                "recipe": recipe.model_dump(mode="json"),
+                "prompt_version": resolve_format(recipe.format).prompt_version,
+            }
+            for recipe in recipes
+        ]
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
 def _resolve_path(path: Path, base: Path) -> Path:
     return path if path.is_absolute() else (base / path).resolve()
-

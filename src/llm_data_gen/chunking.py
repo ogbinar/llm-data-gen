@@ -34,6 +34,8 @@ def chunk_document(document: SourceDocument, config: ChunkingConfig | int) -> li
                 chunk_index=index,
                 source_format=document.source_format or _source_format(document.provenance_path),
                 text=text.strip(),
+                language=document.language,
+                language_origin=document.language_origin,
                 token_estimate=max(1, len(re.findall(r"\S+", text))),
                 provenance_path=document.provenance_path,
                 title=document.title,
@@ -175,4 +177,3 @@ CHUNKER_REGISTRY: dict[str, Chunker] = {
     "markdown_sections": _markdown_section_chunks,
     "fixed_tokens": _fixed_token_chunks,
 }
-

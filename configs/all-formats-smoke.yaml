@@ -1,8 +1,9 @@
-version: 1
-name: all-formats-smoke-v1
+version: 2
+name: all-formats-source-preserving-v2
 
 input:
   path: ../data/raw/globe-broadband.txt
+  language: english
   format: auto
   domain: customer_service
 
@@ -20,7 +21,7 @@ endpoint:
   temperature: 0.2
 
 generation:
-  prompt_pack: all_formats_v1
+  prompt_pack: all_formats_v2
 
 validation:
   grounding: exact_evidence
@@ -28,8 +29,7 @@ validation:
   require_assistant_final_turn: true
 
 output:
-  directory: ../output/all-formats-smoke-v1
+  directory: ../output/globe-broadband-english-source-preserving-v2-r4
   format: jsonl
   resume: true
   include_chunk_text: false
-

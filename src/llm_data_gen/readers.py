@@ -8,6 +8,7 @@ from typing import Any
 
 from .config import InputConfig
 from .models import SourceDocument, SourceFailure
+from .languages import resolve_language
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".json", ".jsonl", ".csv", ".parquet"}
 
@@ -113,7 +114,18 @@ def _document_from_record(
     title = str(title_value).strip() if title_value is not None else path.stem
     checksum = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
+    source_format = config.format if config.format != "auto" else path.suffix.lower().lstrip(".")
+    language = config.language
+    language_origin = "input_default"
+    if source_format in {"json", "jsonl", "csv", "parquet"} and config.language_field:
+        record_language = record.get(config.language_field)
+        if record_language is not None and str(record_language).strip():
+            language = resolve_language(str(record_language)).name
+            language_origin = "record_field"
+
     excluded = {config.id_field, config.text_field, config.title_field}
+    if config.language_field:
+        excluded.add(config.language_field)
     if config.metadata_fields is None:
         metadata = {key: _json_safe(value) for key, value in record.items() if key not in excluded}
     else:
@@ -127,11 +139,11 @@ def _document_from_record(
         source_id=source_id,
         title=title or path.stem,
         text=text,
+        language=language,
+        language_origin=language_origin,
         doc_type=str(record.get("doc_type") or "document"),
         source_kind=str(record.get("source_kind") or "local"),
-        source_format=(
-            path.suffix.lower().lstrip(".") if config.format == "auto" else config.format
-        ),
+        source_format=source_format,
         source_url=_optional_string(record.get("source_url")),
         provenance_note=_optional_string(record.get("provenance_note")),
         provenance_path=str(path),

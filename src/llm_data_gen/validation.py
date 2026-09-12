@@ -20,8 +20,15 @@ def validate_generated_example(
         return errors
     if example.qa_format != job.qa_format:
         errors.append(f"format mismatch: expected {job.qa_format!r}, got {example.qa_format!r}")
-    if example.language != job.language:
-        errors.append(f"language mismatch: expected {job.language!r}, got {example.language!r}")
+    if job.language != chunk.language:
+        errors.append(
+            f"source language provenance mismatch: job={job.language!r}, chunk={chunk.language!r}"
+        )
+    if job.language_origin != chunk.language_origin:
+        errors.append(
+            "source language origin mismatch: "
+            f"job={job.language_origin!r}, chunk={chunk.language_origin!r}"
+        )
     if not example.messages:
         errors.append("messages is empty")
         return errors
@@ -90,4 +97,3 @@ def second_pass_validate(
     if len(example.output_text.strip()) < 8:
         return False, "output_text too short"
     return True, None
-

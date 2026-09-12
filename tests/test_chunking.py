@@ -9,6 +9,7 @@ def test_chunking_is_deterministic():
         source_id="doc-1",
         title="Example",
         text="Paragraph one.\n\nParagraph two.\n\nParagraph three.",
+        language="english",
         provenance_path="/tmp/example.md",
     )
     first = chunk_document(doc, 20)
@@ -23,6 +24,7 @@ def test_short_fixture_stays_single_chunk():
         source_id="fixture-short",
         title="Short",
         text=text,
+        language="english",
         provenance_path="/tmp/short.txt",
     )
     chunks = chunk_document(doc, 500)
@@ -35,6 +37,7 @@ def test_long_fixture_splits():
         source_id="fixture-long",
         title="Long",
         text=text * 30,
+        language="english",
         provenance_path="/tmp/long.txt",
     )
     chunks = chunk_document(doc, 120)

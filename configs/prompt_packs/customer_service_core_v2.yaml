@@ -1,0 +1,10 @@
+version: 2
+name: customer_service_core_v2
+recipes:
+  - format: factual_qa
+    num_examples: 3
+  - format: troubleshooting
+    num_examples: 2
+  - format: multi_turn
+    num_examples: 1
+    max_turns: 6

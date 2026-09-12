@@ -6,29 +6,25 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class LanguageDefinition:
     name: str
-    instruction: str
+    display_name: str
 
 
 LANGUAGE_REGISTRY: dict[str, LanguageDefinition] = {
-    "english": LanguageDefinition("english", "Use natural, clear English appropriate to the interaction."),
-    "tagalog": LanguageDefinition(
-        "tagalog",
-        "Use natural Filipino/Tagalog. Retain technical or commonly used English terms when Filipino speakers would normally do so.",
-    ),
-    "taglish": LanguageDefinition(
-        "taglish",
-        "Use natural conversational Taglish as used by Filipino customers and service representatives. Code-switch naturally; avoid mechanical translation and textbook-style Taglish.",
-    ),
+    "english": LanguageDefinition("english", "English"),
+    "filipino": LanguageDefinition("filipino", "Filipino"),
+    "tagalog": LanguageDefinition("tagalog", "Tagalog"),
+    "taglish": LanguageDefinition("taglish", "Taglish"),
 }
 
 
 def resolve_language(name: str) -> LanguageDefinition:
+    normalized = name.strip().casefold()
     try:
-        return LANGUAGE_REGISTRY[name]
+        return LANGUAGE_REGISTRY[normalized]
     except KeyError as exc:
-        raise ValueError(f"unknown language: {name}") from exc
+        supported = ", ".join(sorted(LANGUAGE_REGISTRY))
+        raise ValueError(f"unknown source language {name!r}; supported values: {supported}") from exc
 
 
 def list_languages() -> list[LanguageDefinition]:
     return list(LANGUAGE_REGISTRY.values())
-

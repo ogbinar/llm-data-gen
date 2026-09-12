@@ -16,6 +16,7 @@ def test_second_pass_validation_checks_evidence():
         source_id="doc-1",
         title="Example",
         text="The ID number is 12345.",
+        language="english",
         provenance_path="/tmp/example.md",
     )
     chunk = chunk_document(doc, 200)[0]
@@ -35,6 +36,7 @@ def test_second_pass_validation_rejects_task_type_mismatch():
         source_id="doc-1",
         title="Example",
         text="The ID number is 12345.",
+        language="english",
         provenance_path="/tmp/example.md",
     )
     chunk = chunk_document(doc, 200)[0]

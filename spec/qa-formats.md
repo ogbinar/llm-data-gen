@@ -2,7 +2,9 @@
 
 ## Principle
 
-QA format and target language are independent dimensions. A format defines the interaction structure and safety constraints. A language definition controls how that interaction is expressed.
+QA format may vary, but language may not. A format defines interaction structure
+and safety constraints. The interaction must preserve the source's declared
+language, register, and existing code-switching; it must never translate.
 
 Every generated example returns structured chat messages, exact source evidence, and optional format-specific metadata.
 
@@ -14,7 +16,6 @@ Generated example:
 {
   "status": "generated",
   "qa_format": "factual_qa",
-  "language": "english",
   "messages": [
     {"role": "user", "content": "..."},
     {"role": "assistant", "content": "..."}
@@ -30,7 +31,6 @@ Unsupported example:
 {
   "status": "not_applicable",
   "qa_format": "cross_sell",
-  "language": "english",
   "messages": [],
   "evidence": [],
   "metadata": {},
@@ -38,19 +38,16 @@ Unsupported example:
 }
 ~~~
 
-## Languages
+The model-facing object deliberately omits `language`. The pipeline copies the
+declared source language into the accepted `sft_chat_v1.language` field.
 
-### English
+## Source-language preservation
 
-Use natural, clear English appropriate to the interaction.
-
-### Tagalog
-
-Use natural Filipino/Tagalog. Retain technical and commonly used English terms when Filipino speakers would normally retain them.
-
-### Taglish
-
-Use natural conversational Taglish. Code-switch naturally and avoid mechanical translation or textbook-style Taglish.
+- `english`, `filipino`, `tagalog`, and `taglish` are declared source-provenance labels.
+- English stays English; Filipino/Tagalog stays Filipino/Tagalog; Taglish stays Taglish.
+- Do not translate, introduce code-switching, or remove code-switching.
+- Retain supported technical terms and proper nouns as the source/register warrants.
+- The model does not choose or certify the label.
 
 ## Formats
 
@@ -151,8 +148,8 @@ Prompts are assembled from:
 1. global grounding policy;
 2. format instruction;
 3. format constraints;
-4. language instruction;
-5. output schema;
+4. source-language-preservation constraints;
+5. output schema without a model-owned language label;
 6. source chunk and provenance.
 
 Each format has an independent prompt version. The composed prompt receives a stable hash.
@@ -166,10 +163,10 @@ All generated examples must pass:
 - non-empty messages;
 - user-first alternating roles;
 - final assistant message when configured;
-- requested format and language equality;
+- requested format equality;
+- source/chunk/job/accepted-row language-provenance equality;
 - format-specific message/metadata rules;
 - exact evidence occurrence in the source;
 - normalized exact-duplicate detection.
 
-Language metadata is checked structurally. Semantic language detection is not claimed.
-
+Language provenance is checked structurally. Semantic language detection is not claimed.

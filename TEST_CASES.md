@@ -8,7 +8,8 @@
 ## Configuration
 
 - Valid YAML loads through Pydantic.
-- Unknown fields, profiles, formats, languages, packs, and chunkers fail before inference.
+- Unknown fields, profiles, formats, source languages, packs, and chunkers fail before inference.
+- Config V2 requires `input.language`; V1 target-language arrays fail with migration guidance.
 - Relative paths resolve against the config file.
 - Numeric bounds and overlap rules are enforced.
 - Resolved config hashing is deterministic.
@@ -23,6 +24,9 @@
 - Text, Markdown, JSON, JSONL, CSV, and Parquet normalize into one source schema.
 - Malformed and empty records are isolated.
 - Source IDs and checksums are stable.
+- Text/Markdown inherit the configured language; structured records support
+  `language_field` defaults and overrides, including mixed corpora.
+- Invalid record-level languages are isolated with record provenance.
 
 ## Chunking
 
@@ -34,16 +38,17 @@
 
 ## Registries and Prompting
 
-- All ten QA formats and three languages are registered.
+- All ten QA formats and four source-language labels are registered.
 - Legacy format aliases resolve correctly.
-- Format and language instructions compose independently.
+- Prompts preserve source language/register and forbid translation or changes to code-switching.
 - Prompt packs and recipe overrides expand deterministically.
 - Prompt name, version, and hash are retained.
 - Prompt construction has no corpus-reader, chunker, or backend coupling.
 
 ## Generation Jobs
 
-- Every chunk expands across format, language, and sample index.
+- Every chunk expands across format and sample index only.
+- Jobs inherit language from chunks; language never multiplies job counts.
 - Job and recipe hashes are deterministic.
 - Generation-setting changes alter job identity.
 - Inspection reports exact expected jobs without inference.
@@ -54,7 +59,8 @@
 - Additional prose, arrays, and malformed JSON fail closed.
 - Two-turn and multi-turn messages parse structurally.
 - Roles start with user, alternate, and end with assistant when required.
-- Format and language labels match the requested job.
+- The strict model-facing schema rejects a model-returned language label.
+- Source, chunk, job, and accepted-row language provenance agree.
 - Intent responses require `metadata.intent`.
 - Multi-turn examples honor structural limits.
 - Exact evidence exists in the source.
@@ -84,7 +90,7 @@
 
 - `validate-config` performs no inference.
 - `inspect` performs no inference.
-- Registry listing commands reflect implementation state.
+- Registry listing commands reflect formats and source-language labels.
 - `run` writes a standard dataset directory.
 - `retry` only re-executes selected rejected stages.
 - `export` produces the requested derived format.
@@ -96,4 +102,3 @@ uv run pytest -q
 ~~~
 
 A live smoke against the configured endpoint follows the deterministic suite.
-

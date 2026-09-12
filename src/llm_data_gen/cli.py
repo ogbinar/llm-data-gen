@@ -20,6 +20,7 @@ COMMANDS = {
     "inspect",
     "list-formats",
     "list-languages",
+    "list-source-languages",
     "list-chunkers",
     "list-prompt-packs",
     "list-endpoints",
@@ -46,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("list-formats")
     subparsers.add_parser("list-languages")
+    subparsers.add_parser("list-source-languages")
     subparsers.add_parser("list-chunkers")
     subparsers.add_parser("list-prompt-packs")
     subparsers.add_parser("list-endpoints")
@@ -62,6 +64,7 @@ def build_legacy_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", required=True, type=Path, help="Input document or JSONL corpus")
     parser.add_argument("--output", default=Path("output/generated_examples.jsonl"), type=Path)
     parser.add_argument("--source-id", default=None)
+    parser.add_argument("--source-language", required=True)
     parser.add_argument("--chunk-size", default=1200, type=int)
     parser.add_argument("--backend-name", default="llama-swap")
     parser.add_argument("--backend-base-url", default="http://127.0.0.1:8080/v1")
@@ -121,7 +124,7 @@ def main(argv: list[str] | None = None) -> None:
                 {
                     "valid": True,
                     "name": config.name,
-                    "config_hash": config_hash(config),
+                    "config_hash": config_hash(config, recipes),
                     "endpoint_profile": config.endpoint.profile,
                     "backend": config.endpoint.backend,
                     "model": config.endpoint.model,
@@ -148,7 +151,7 @@ def main(argv: list[str] | None = None) -> None:
                 indent=2,
             )
         )
-    elif args.command == "list-languages":
+    elif args.command in {"list-languages", "list-source-languages"}:
         print(json.dumps([item.name for item in list_languages()], indent=2))
     elif args.command == "list-chunkers":
         print(json.dumps(list_chunkers(), indent=2))
@@ -172,6 +175,7 @@ def _legacy_main(arguments: list[str]) -> None:
         input_path=args.input,
         output_path=args.output,
         source_id=args.source_id,
+        source_language=args.source_language,
         chunk_size=args.chunk_size,
         resume=args.resume,
         backend=BackendConfig(

@@ -7,8 +7,10 @@ from .models import SourceDocument
 from .readers import read_corpus
 
 
-def load_source_document(path: Path, source_id: str | None = None) -> SourceDocument:
-    documents, failures = read_corpus(InputConfig(path=path))
+def load_source_document(
+    path: Path, source_id: str | None = None, source_language: str = "english"
+) -> SourceDocument:
+    documents, failures = read_corpus(InputConfig(path=path, language=source_language))
     if source_id is not None:
         for document in documents:
             if document.source_id == source_id:
@@ -19,4 +21,3 @@ def load_source_document(path: Path, source_id: str | None = None) -> SourceDocu
     if failures:
         raise ValueError(failures[0].failure_reason)
     raise ValueError(f"No records found in {path}")
-

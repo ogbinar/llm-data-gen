@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PromptFamily(str, Enum):
@@ -18,6 +18,8 @@ class SourceDocument(BaseModel):
     source_id: str
     title: str
     text: str
+    language: str
+    language_origin: Literal["input_default", "record_field", "legacy_default"] = "input_default"
     doc_type: str = "document"
     source_kind: str = "local"
     source_format: str = "text"
@@ -35,6 +37,8 @@ class Chunk(BaseModel):
     chunk_index: int
     source_format: str
     text: str
+    language: str
+    language_origin: Literal["input_default", "record_field", "legacy_default"] = "input_default"
     token_estimate: int
     provenance_path: str
     title: str
@@ -53,9 +57,10 @@ class ChatMessage(BaseModel):
 
 
 class GeneratedExample(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     status: Literal["generated", "not_applicable"] = "generated"
     qa_format: str
-    language: str
     messages: list[ChatMessage] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -75,6 +80,7 @@ class GenerationJob(BaseModel):
     chunk_id: str
     qa_format: str
     language: str
+    language_origin: Literal["input_default", "record_field", "legacy_default"] = "input_default"
     prompt_name: str
     prompt_version: str
     sample_index: int

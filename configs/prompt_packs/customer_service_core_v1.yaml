@@ -1,5 +1,6 @@
+# Historical V1 target-language pack. V2 loaders reject this pack loudly.
 version: 1
-name: customer_service_core_v1
+name: historical-v1-target-language-smoke
 recipes:
   - format: factual_qa
     languages: [english, tagalog, taglish]
@@ -11,4 +12,3 @@ recipes:
     languages: [taglish]
     num_examples: 1
     max_turns: 6
-

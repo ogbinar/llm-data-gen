@@ -1,8 +1,9 @@
-version: 1
-name: example-customer-service-v1
+version: 2
+name: example-customer-service-source-preserving-v2
 
 input:
-  path: ../data/raw
+  path: ../data/raw/globe-broadband.txt
+  language: english
   format: auto
   recursive: true
   id_field: source_id
@@ -24,7 +25,7 @@ endpoint:
   temperature: 0.2
 
 generation:
-  prompt_pack: customer_service_core_v1
+  prompt_pack: customer_service_core_v2
 
 validation:
   grounding: exact_evidence
@@ -32,8 +33,7 @@ validation:
   require_assistant_final_turn: true
 
 output:
-  directory: ../output/example-customer-service-v1
+  directory: ../output/example-customer-service-source-preserving-v2
   format: jsonl
   resume: true
   include_chunk_text: false
-

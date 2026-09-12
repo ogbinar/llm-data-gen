@@ -10,7 +10,7 @@ class FormatDefinition:
     purpose: str
     instruction: str
     constraints: tuple[str, ...]
-    prompt_version: str = "v1"
+    prompt_version: str = "v5"
     implemented: bool = True
     min_messages: int = 2
     supported_settings: tuple[str, ...] = ()
@@ -31,7 +31,11 @@ FORMAT_REGISTRY: dict[str, FormatDefinition] = {
     "troubleshooting": FormatDefinition(
         "troubleshooting", "Troubleshooting", "Generate a problem and grounded diagnostic or resolution response.",
         "Write a realistic customer problem and a diagnostic or resolution-oriented response supported by the source.",
-        ("Do not invent troubleshooting steps.", "Distinguish possible diagnosis from confirmed facts."),
+        (
+            "Do not invent troubleshooting steps.",
+            "Distinguish possible diagnosis from confirmed facts.",
+            "If the source gives no diagnostic or resolution steps, say so explicitly; do not supply common-sense steps such as restarting equipment or checking cables.",
+        ),
     ),
     "scenario_response": FormatDefinition(
         "scenario_response", "Scenario Response", "Generate a situation and the best grounded response.",
@@ -53,18 +57,29 @@ FORMAT_REGISTRY: dict[str, FormatDefinition] = {
     "conflict_resolution": FormatDefinition(
         "conflict_resolution", "Conflict Resolution", "Generate a difficult interaction and de-escalating response.",
         "Write a realistic complaint and a calm, grounded de-escalation or resolution response.",
-        ("Do not promise refunds, compensation, exceptions, or escalation outcomes unless supported.", "Recommend escalation when the source is insufficient."),
+        (
+            "Do not promise refunds, compensation, exceptions, or escalation outcomes unless supported.",
+            "Do not pretend to inspect service, dispatch a technician, or provide undocumented troubleshooting steps.",
+            "When the source is insufficient, acknowledge the concern and state the documented limits without inventing a resolution path.",
+        ),
     ),
     "needs_recommendation": FormatDefinition(
         "needs_recommendation", "Needs Recommendation", "Generate a need and a source-supported recommendation.",
         "Write a customer need and recommend only a product, service, rule, or option supported by the source.",
-        ("Return not_applicable when the source supports no recommendation.",),
+        (
+            "Return not_applicable when the source supports no recommendation.",
+            "Do not map a named plan, price, speed tier, use case, or benefit to another unless the source explicitly connects them.",
+        ),
         allows_not_applicable=True,
     ),
     "cross_sell": FormatDefinition(
         "cross_sell", "Cross-sell", "Generate a complementary source-supported recommendation.",
         "Write a current customer or product context and a relevant complementary recommendation supported by the source.",
-        ("Never invent a product or benefit.", "Return not_applicable when no complementary recommendation is supported."),
+        (
+            "Never invent a product or benefit.",
+            "Do not claim upgrade eligibility, availability, or a plan-to-speed mapping unless the source explicitly states it.",
+            "Return not_applicable when no complementary recommendation is supported.",
+        ),
         allows_not_applicable=True,
     ),
     "intent_response": FormatDefinition(

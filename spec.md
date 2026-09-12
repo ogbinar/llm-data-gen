@@ -2,7 +2,9 @@
 
 ## Status
 
-Version 1 of the config-driven dataset compiler contract is frozen in `IMPLEMENTATION_PLAN.md`.
+Version 2 is the binding source-language-preserving contract in
+`IMPLEMENTATION_PLAN.md` §0. Version 1 is historical; its complete design record
+is archived in `IMPLEMENTATION_PLAN_HISTORY_2026-09-12.md`.
 
 ## Purpose
 
@@ -16,7 +18,7 @@ A run configuration must select:
 2. chunking strategy and parameters;
 3. OpenAI-compatible endpoint and model;
 4. prompt pack or explicit QA-format recipes;
-5. target languages;
+5. required default source language and optional structured-record language field;
 6. validation policy;
 7. output directory and resume policy.
 
@@ -30,7 +32,11 @@ uv run llm-data-gen run CONFIG_PATH
 
 A corpus can be one file or a directory containing text, Markdown, JSON, JSONL, CSV, or Parquet records.
 
-Every valid source record becomes a `SourceDocument` with stable identity, checksum, provenance, domain, text, and metadata. Malformed records must not terminate processing of the remaining corpus.
+Every valid source record becomes a `SourceDocument` with stable identity,
+checksum, declared language and language origin, provenance, domain, text, and
+metadata. Text and Markdown use `input.language`. Structured records may override
+that default through `language_field`, enabling mixed-language corpora. Invalid
+non-empty language values are isolated as source failures.
 
 ## Chunking
 
@@ -43,23 +49,29 @@ Required strategies:
 - `markdown_sections`;
 - `fixed_tokens`.
 
-Chunk provenance includes source identity/checksum, strategy/version, index, offsets when available, token estimate, and source metadata.
+Chunk provenance includes source identity/checksum, inherited language and origin,
+strategy/version, index, offsets when available, token estimate, and source metadata.
 
 ## Generation
 
 Every requested example is an independent deterministic job:
 
 ~~~text
-chunk + QA format + language + prompt version + settings + sample index
+chunk + QA format + prompt version + settings + sample index
 ~~~
 
-The system expands prompt packs and recipes before inference. Format instructions, language instructions, output schema, and source chunk are composed independently.
+The system expands prompt packs and recipes before inference. Recipes select
+formats only; source language never multiplies jobs. Prompts preserve the chunk's
+declared language/register and prohibit translation or intentional changes to
+code-switching.
 
 All inference passes through one OpenAI-compatible client.
 
 ## QA Formats
 
-The format contract is defined in `spec/qa-formats.md`. Ten formats are registered and implemented. Languages are English, Tagalog, and Taglish.
+The format contract is defined in `spec/qa-formats.md`. Ten formats are registered
+and implemented. Supported source labels are English, Filipino, Tagalog, and
+Taglish. There is no translation mode.
 
 ## Output
 
@@ -83,7 +95,7 @@ Required layers:
 
 - parsing and schema;
 - conversation roles and structure;
-- requested format/language contract;
+- requested format and source/chunk/job language-provenance consistency;
 - format-specific rules;
 - exact source evidence;
 - exact normalized duplicate detection.
@@ -96,7 +108,8 @@ Unsupported recommendation-style requests may produce a structured `not_applicab
 - Terminal job outcomes are checkpointed.
 - Resume executes only missing jobs.
 - Selected rejected stages can be retried explicitly.
-- Existing legacy CLI behavior remains available during migration.
+- V1 target-language configs fail before inference with actionable migration
+  guidance. The deprecated argument CLI requires explicit source language.
 
 ## Exports
 
@@ -104,5 +117,6 @@ JSONL is canonical. CSV, Parquet, and legacy JSONL are derived exports.
 
 ## Non-Goals
 
-The current system does not require a database, queue, distributed scheduler, semantic chunker, fuzzy deduplicator, semantic language detector, or LLM-as-judge validator.
-
+The current system does not translate, select a target language, or claim semantic
+language detection. It also does not require a database, queue, distributed
+scheduler, semantic chunker, fuzzy deduplicator, or LLM-as-judge validator.
